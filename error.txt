@@ -1,2 +1,55 @@
+Consider using the pymupdf_layout package for a greatly improved page layout analysis.
+================================================================================
+PREMERA DOCUMENT EXTRACTOR - SSL FIXED
+================================================================================
+
+📄 PDF: BC - Determine If BlueCard Claim2 - P966.pdf
+👤 User: hareesha.thippaih@premera.com
+🔒 SSL: COMPLETELY DISABLED
+
+================================================================================
+LOGGING IN TO PREMERA PORTAL
+================================================================================
 Attempting login to https://premera.zavanta.com...
-✗ Login error: HTTPSConnectionPool(host='premera.zavanta.com', port=443): Max retries exceeded with url: / (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate in certificate chain (_ssl.c:1006)')))
+⚠️  SSL verification is DISABLED
+Login page status: 200
+⚠️  No form found on login page
+
+================================================================================
+STARTING EXTRACTION
+================================================================================
+
+================================================================================
+FULL EXTRACTION - FOLLOWING ALL REFERENCES
+================================================================================
+
+================================================================================
+EXTRACTING PDF CONTENT
+================================================================================
+
+📄 PDF Analysis:
+   • Document: BC - Determine If BlueCard Claim2 - P966.pdf
+   • Hyperlinks: 37
+   • Procedure references: 0
+
+   Procedures found:
+
+================================================================================
+FETCHING PROCEDURE DOCUMENTS (max depth: 2)
+================================================================================
+
+✓ Saved: output/premera_procedures.json
+✓ Saved: output/premera_procedures_summary.txt
+
+================================================================================
+✅ EXTRACTION COMPLETE!
+================================================================================
+
+📊 Statistics:
+   Total documents: 0
+   ✓ Successful: 0
+   ✗ Failed: 0
+
+📁 Output:
+   • output/premera_procedures.json
+   • output/premera_procedures_summary.txt
