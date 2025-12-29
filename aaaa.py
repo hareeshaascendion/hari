@@ -3,8 +3,14 @@ import json
 import fitz  # PyMuPDF
 import pymupdf4llm
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
+
+# =====================================================
+# DISABLE SSL WARNINGS (CORPORATE CERTS)
+# =====================================================
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =====================================================
 # WINDOWS PDF PATH
@@ -12,7 +18,7 @@ from urllib.parse import urljoin, urlparse
 PDF_PATH = r"C:\Users\US67251\OneDrive - Premera Blue Cross\Desktop\Premera\p966_claim\hari_new\BC - Determine If BlueCard Claim2 - P966.pdf"
 
 # =====================================================
-# HARDCODED CREDENTIALS (AS REQUESTED)
+# HARDCODED CREDENTIALS
 # =====================================================
 USERNAME = "hareesha.thippaih@premera.com"
 PASSWORD = "Narasamma@65"
@@ -24,10 +30,9 @@ PORTAL_DOMAIN = "premera.zavanta.com"
 # PDF TEXT + LINK EXTRACTION (FIXED)
 # -----------------------------------------------------
 def extract_pdf_content(pdf_path):
-    # Open document for links
     doc = fitz.open(pdf_path)
 
-    # ✅ CORRECT: convert full PDF to markdown ONCE
+    # Correct pymupdf4llm usage
     markdown_pages = pymupdf4llm.to_markdown(pdf_path)
 
     pdf_data = {
@@ -55,7 +60,7 @@ def extract_pdf_content(pdf_path):
 
 
 # -----------------------------------------------------
-# LOGIN TO ZAVANTA PORTAL
+# LOGIN TO ZAVANTA (SSL FIXED)
 # -----------------------------------------------------
 def create_portal_session():
     session = requests.Session()
@@ -67,14 +72,20 @@ def create_portal_session():
         "password": PASSWORD
     }
 
-    response = session.post(login_url, data=payload, timeout=30)
+    # 🔴 SSL FIX IS HERE
+    response = session.post(
+        login_url,
+        data=payload,
+        timeout=30,
+        verify=False  # ✅ FIX
+    )
     response.raise_for_status()
 
     return session
 
 
 # -----------------------------------------------------
-# HTML + CHILD LINK EXTRACTION
+# HTML + CHILD LINK EXTRACTION (SSL FIXED)
 # -----------------------------------------------------
 def extract_html_text(session, url, parent_url=None, visited=None):
     if visited is None:
@@ -85,7 +96,11 @@ def extract_html_text(session, url, parent_url=None, visited=None):
 
     visited.add(url)
 
-    response = session.get(url, timeout=30)
+    response = session.get(
+        url,
+        timeout=30,
+        verify=False  # ✅ FIX
+    )
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "lxml")
@@ -111,11 +126,11 @@ def extract_html_text(session, url, parent_url=None, visited=None):
 def run_pipeline():
     final_output = {}
 
-    # Step 1: Extract PDF content
+    # Step 1: PDF
     pdf_data = extract_pdf_content(PDF_PATH)
     final_output["pdf"] = pdf_data
 
-    # Step 2: Collect Zavanta links from PDF
+    # Step 2: Collect Zavanta links
     portal_links = {
         link["url"]
         for page in pdf_data["pages"]
@@ -123,7 +138,7 @@ def run_pipeline():
         if PORTAL_DOMAIN in link["url"]
     }
 
-    # Step 3: Extract portal + child HTML
+    # Step 3: Portal + child pages
     session = create_portal_session()
     visited = set()
     portal_results = []
@@ -158,7 +173,7 @@ def run_pipeline():
 
 
 # -----------------------------------------------------
-# RUN SCRIPT
+# RUN
 # -----------------------------------------------------
 if __name__ == "__main__":
     result = run_pipeline()
