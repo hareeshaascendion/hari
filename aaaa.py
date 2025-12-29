@@ -6,29 +6,39 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
-PDF_PATH = "/mnt/data/BC_Determine_If_BlueCard_Claim_P966.pdf"
+# =====================================================
+# WINDOWS PDF PATH
+# =====================================================
+PDF_PATH = r"C:\Users\hareesha.thippaih\Documents\BC_Determine_If_BlueCard_Claim_P966.pdf"
+
+# =====================================================
+# HARDCODED CREDENTIALS (AS REQUESTED)
+# =====================================================
+USERNAME = "hareesha.thippaih@premera.com"
+PASSWORD = "Narasamma@65"
+
 PORTAL_DOMAIN = "premera.zavanta.com"
 
-USERNAME = os.getenv("ZAVANTA_USERNAME")
-PASSWORD = os.getenv("ZAVANTA_PASSWORD")
 
-# -------------------------
-# PDF Extraction
-# -------------------------
+# -----------------------------------------------------
+# PDF TEXT + LINK EXTRACTION
+# -----------------------------------------------------
 def extract_pdf_content(pdf_path):
     doc = fitz.open(pdf_path)
-    pdf_data = {"file_name": os.path.basename(pdf_path), "pages": []}
+    pdf_data = {
+        "file_name": os.path.basename(pdf_path),
+        "pages": []
+    }
 
     for page_num, page in enumerate(doc, start=1):
         text = pymupdf4llm.to_markdown(page)
         links = []
 
         for link in page.get_links():
-            uri = link.get("uri")
-            if uri:
+            if link.get("uri"):
                 links.append({
                     "text": page.get_textbox(link["from"]),
-                    "url": uri
+                    "url": link["uri"]
                 })
 
         pdf_data["pages"].append({
@@ -40,9 +50,9 @@ def extract_pdf_content(pdf_path):
     return pdf_data
 
 
-# -------------------------
-# Portal Login Session
-# -------------------------
+# -----------------------------------------------------
+# LOGIN TO ZAVANTA PORTAL
+# -----------------------------------------------------
 def create_portal_session():
     session = requests.Session()
 
@@ -53,15 +63,15 @@ def create_portal_session():
         "password": PASSWORD
     }
 
-    response = session.post(login_url, data=payload)
+    response = session.post(login_url, data=payload, timeout=30)
     response.raise_for_status()
 
     return session
 
 
-# -------------------------
-# HTML Extraction
-# -------------------------
+# -----------------------------------------------------
+# HTML + CHILD LINK EXTRACTION
+# -----------------------------------------------------
 def extract_html_text(session, url, parent_url=None, visited=None):
     if visited is None:
         visited = set()
@@ -71,75 +81,79 @@ def extract_html_text(session, url, parent_url=None, visited=None):
 
     visited.add(url)
 
-    resp = session.get(url)
+    resp = session.get(url, timeout=30)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "lxml")
     page_text = soup.get_text(separator=" ", strip=True)
 
-    child_links = []
+    child_urls = set()
     for a in soup.find_all("a", href=True):
         full_url = urljoin(url, a["href"])
         if PORTAL_DOMAIN in urlparse(full_url).netloc:
-            child_links.append(full_url)
+            child_urls.add(full_url)
 
     return {
         "url": url,
         "parent_url": parent_url,
         "text": page_text,
-        "child_links": child_links
+        "child_links": list(child_urls)
     }
 
 
-# -------------------------
-# Main Pipeline
-# -------------------------
+# -----------------------------------------------------
+# PIPELINE
+# -----------------------------------------------------
 def run_pipeline():
     output = {}
 
-    # Step 1: PDF
+    # Step 1: PDF extraction
     pdf_data = extract_pdf_content(PDF_PATH)
     output["pdf"] = pdf_data
 
-    # Step 2: Collect Portal Links
-    portal_links = set()
-    for page in pdf_data["pages"]:
-        for link in page["links"]:
-            if PORTAL_DOMAIN in link["url"]:
-                portal_links.add(link["url"])
+    # Step 2: Collect Zavanta links
+    portal_links = {
+        link["url"]
+        for page in pdf_data["pages"]
+        for link in page["links"]
+        if PORTAL_DOMAIN in link["url"]
+    }
 
-    # Step 3: Portal HTML Extraction
+    # Step 3: Portal + child HTML
     session = create_portal_session()
-    portal_results = []
     visited = set()
+    portal_results = []
 
     for url in portal_links:
         page_data = extract_html_text(session, url, parent_url="PDF", visited=visited)
         if not page_data:
             continue
 
-        child_data = []
+        child_pages = []
         for child_url in page_data["child_links"]:
-            child_page = extract_html_text(
-                session, child_url, parent_url=url, visited=visited
+            child_data = extract_html_text(
+                session,
+                child_url,
+                parent_url=url,
+                visited=visited
             )
-            if child_page:
-                child_data.append(child_page)
+            if child_data:
+                child_pages.append(child_data)
 
-        page_data["child_links"] = child_data
+        page_data["child_links"] = child_pages
         portal_results.append(page_data)
 
     output["portal_html"] = portal_results
-
     return output
 
 
-# -------------------------
-# Execute
-# -------------------------
+# -----------------------------------------------------
+# RUN
+# -----------------------------------------------------
 if __name__ == "__main__":
-    final_json = run_pipeline()
-    with open("extracted_output.json", "w", encoding="utf-8") as f:
-        json.dump(final_json, f, indent=2, ensure_ascii=False)
+    result = run_pipeline()
 
-    print("✅ Extraction completed → extracted_output.json")
+    with open("extracted_output.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+    print("✅ Extraction completed: extracted_output.json")
