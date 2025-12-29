@@ -1,18 +1,15 @@
 """
-Premera Selenium Extractor - For JavaScript-Rendered Pages
-Uses Selenium to render JS content before extracting text
-
-Install: pip install selenium webdriver-manager
+Premera Selenium Extractor - Works on Corporate Network
+Uses Microsoft Edge (pre-installed on Windows) - No download needed!
 """
 import pymupdf4llm
 import pymupdf as fitz
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
@@ -31,10 +28,11 @@ class PremeraSeleniumExtractor:
         self.driver = None
         
     def setup_browser(self, headless: bool = True):
-        """Setup Chrome browser"""
-        print("Setting up browser...")
+        """Setup Microsoft Edge browser (pre-installed on Windows)"""
+        print("Setting up Microsoft Edge browser...")
+        print("(Edge is pre-installed on Windows - no download needed)")
         
-        options = Options()
+        options = EdgeOptions()
         if headless:
             options.add_argument('--headless')
         options.add_argument('--no-sandbox')
@@ -45,11 +43,11 @@ class PremeraSeleniumExtractor:
         options.add_argument('--ignore-ssl-errors')
         options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=options)
+        # Use Edge - no need to download driver on Windows 10/11
+        self.driver = webdriver.Edge(options=options)
         self.driver.set_page_load_timeout(60)
         
-        print("✓ Browser ready")
+        print("✓ Edge browser ready")
     
     def login_to_portal(self, login_url: str, username: str, password: str):
         """Login using Selenium"""
@@ -62,23 +60,26 @@ class PremeraSeleniumExtractor:
             try:
                 # Find username field
                 username_field = None
-                for selector in ['input[name*="user"]', 'input[name*="email"]', 'input[type="email"]', '#username', '#email']:
+                for selector in ['input[name*="user"]', 'input[name*="email"]', 'input[type="email"]', '#username', '#email', 'input[id*="user"]', 'input[id*="email"]']:
                     try:
                         username_field = self.driver.find_element(By.CSS_SELECTOR, selector)
-                        break
+                        if username_field.is_displayed():
+                            break
                     except:
                         continue
                 
                 # Find password field
                 password_field = None
-                for selector in ['input[name*="pass"]', 'input[type="password"]', '#password']:
+                for selector in ['input[name*="pass"]', 'input[type="password"]', '#password', 'input[id*="pass"]']:
                     try:
                         password_field = self.driver.find_element(By.CSS_SELECTOR, selector)
-                        break
+                        if password_field.is_displayed():
+                            break
                     except:
                         continue
                 
                 if username_field and password_field:
+                    print("Found login form, entering credentials...")
                     username_field.clear()
                     username_field.send_keys(username)
                     time.sleep(0.5)
@@ -88,27 +89,28 @@ class PremeraSeleniumExtractor:
                     time.sleep(0.5)
                     
                     # Find and click submit
-                    for selector in ['button[type="submit"]', 'input[type="submit"]', 'button:contains("Login")', '.login-btn']:
+                    for selector in ['button[type="submit"]', 'input[type="submit"]', 'button.login', '.login-btn', '#login-btn', 'button']:
                         try:
                             submit_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
-                            submit_btn.click()
-                            break
+                            if submit_btn.is_displayed():
+                                submit_btn.click()
+                                break
                         except:
                             continue
                     
-                    time.sleep(5)  # Wait for login to complete
+                    time.sleep(5)  # Wait for login
                     print("✓ Login submitted")
                 else:
-                    print("⚠️ Could not find login form fields")
+                    print("⚠️ No login form found - may already be authenticated")
                     
             except Exception as e:
-                print(f"⚠️ Login form issue: {e}")
+                print(f"⚠️ Login note: {e}")
             
             return True
             
         except Exception as e:
-            print(f"✗ Login error: {e}")
-            return False
+            print(f"⚠️ Login issue: {e}")
+            return True
     
     def extract_pdf_content(self):
         """Extract text and hyperlinks from PDF"""
@@ -138,10 +140,17 @@ class PremeraSeleniumExtractor:
         
         print(f"✓ PDF: {len(markdown_text)} chars, {len(hyperlinks)} links")
         
+        # Show sample links
+        print(f"\nSample hyperlinks found:")
+        for i, link in enumerate(hyperlinks[:5], 1):
+            print(f"   {i}. {link['url'][:70]}")
+        if len(hyperlinks) > 5:
+            print(f"   ... and {len(hyperlinks) - 5} more")
+        
         return {'markdown_text': markdown_text, 'hyperlinks': hyperlinks}
     
     def fetch_url(self, url: str, depth: int = 0):
-        """Fetch and extract text from URL using Selenium"""
+        """Fetch and extract FULL text from URL using Selenium"""
         if url in self.visited_urls:
             return None
         
@@ -153,47 +162,74 @@ class PremeraSeleniumExtractor:
             
             self.driver.get(url)
             
-            # Wait for page to load
+            # Wait for page to fully load
             time.sleep(3)
             
-            # Wait for body to be present
+            # Wait for body
             try:
-                WebDriverWait(self.driver, 10).until(
+                WebDriverWait(self.driver, 15).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
             except:
                 pass
             
-            # Scroll to load lazy content
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
-            self.driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)
+            # Scroll to trigger lazy loading
+            try:
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(1)
+                self.driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(1)
+            except:
+                pass
             
-            # Get page source after JS rendering
+            # Wait for any dynamic content
+            time.sleep(2)
+            
+            # Get page source AFTER JavaScript rendering
             page_source = self.driver.page_source
+            page_source_length = len(page_source)
             
-            # Extract text
+            # Parse HTML
             soup = BeautifulSoup(page_source, 'html.parser')
             
             # Remove unwanted elements
-            for tag in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'noscript']):
+            for tag in soup.find_all(['script', 'style', 'nav', 'noscript', 'svg', 'iframe']):
                 tag.decompose()
             
-            # Try to get main content
+            # Try multiple methods to get text
             text = ""
-            for selector in ['main', 'article', '.content', '#content', '.document-content', 'body']:
+            
+            # Method 1: Look for main content containers
+            content_selectors = [
+                'main', 'article', '.content', '#content', 
+                '.document-content', '.doc-content', '.page-content',
+                '.main-content', '#main-content', '.body-content',
+                '[role="main"]', '.zavanta-content', '.document',
+                '.procedure-content', '.policy-content'
+            ]
+            
+            for selector in content_selectors:
                 content = soup.select_one(selector)
                 if content:
                     text = content.get_text(separator='\n', strip=True)
-                    if len(text) > 100:
+                    if len(text) > 200:
                         break
             
-            if not text:
+            # Method 2: Get body text if no container found
+            if len(text) < 200:
+                body = soup.find('body')
+                if body:
+                    # Remove header/footer if present
+                    for tag in body.find_all(['header', 'footer', 'nav']):
+                        tag.decompose()
+                    text = body.get_text(separator='\n', strip=True)
+            
+            # Method 3: Get all text
+            if len(text) < 200:
                 text = soup.get_text(separator='\n', strip=True)
             
             # Clean text
-            text = re.sub(r'\n\s*\n', '\n\n', text)
+            text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)  # Remove multiple blank lines
             text = text.strip()
             
             # Get child links
@@ -202,18 +238,24 @@ class PremeraSeleniumExtractor:
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag['href']
                 full_url = urljoin(url, href)
+                
+                # Same domain and not visited
                 if base_domain in urlparse(full_url).netloc and full_url not in self.visited_urls:
+                    link_text = a_tag.get_text(strip=True)[:100]
                     if full_url not in [c['url'] for c in child_links]:
                         child_links.append({
                             'url': full_url,
-                            'text': a_tag.get_text(strip=True)[:100]
+                            'text': link_text
                         })
             
-            print(f"{indent}✓ Text: {len(text)} chars, Links: {len(child_links)}")
+            print(f"{indent}✓ HTML: {page_source_length} chars → Text: {len(text)} chars, Links: {len(child_links)}")
             
-            # Preview
-            preview = text[:150].replace('\n', ' ')
-            print(f"{indent}   Preview: {preview}...")
+            # Show preview
+            if len(text) > 0:
+                preview = text[:150].replace('\n', ' ')
+                print(f"{indent}   Preview: {preview}...")
+            else:
+                print(f"{indent}   ⚠️ No text extracted!")
             
             return {
                 'url': url,
@@ -222,30 +264,39 @@ class PremeraSeleniumExtractor:
                 'title': self.driver.title,
                 'text': text,
                 'text_length': len(text),
+                'html_length': page_source_length,
                 'child_links': child_links
             }
             
         except Exception as e:
             print(f"{indent}✗ Error: {str(e)}")
-            return None
+            return {
+                'url': url,
+                'depth': depth,
+                'status': 'error',
+                'error': str(e)
+            }
     
-    def extract_all(self, max_depth: int = 2, max_links: int = 10):
-        """Extract everything"""
+    def extract_all(self, max_depth: int = 2, max_links_per_page: int = 10):
+        """Extract everything recursively"""
         print(f"\n{'='*80}")
-        print("SELENIUM EXTRACTION")
+        print("SELENIUM RECURSIVE EXTRACTION")
+        print(f"Max depth: {max_depth}, Max links/page: {max_links_per_page}")
         print('='*80)
         
-        # Extract PDF
+        # Extract PDF first
         pdf_data = self.extract_pdf_content()
         
         self.all_content['_source_pdf'] = {
             'file': self.pdf_path,
             'full_text': pdf_data['markdown_text'],
-            'text_length': len(pdf_data['markdown_text'])
+            'text_length': len(pdf_data['markdown_text']),
+            'hyperlinks_count': len(pdf_data['hyperlinks'])
         }
         
-        # Queue links
-        to_visit = [{'url': l['url'], 'depth': 0} for l in pdf_data['hyperlinks']]
+        # Queue all PDF links
+        to_visit = [{'url': l['url'], 'depth': 0, 'source': f"PDF page {l['page']}"} 
+                    for l in pdf_data['hyperlinks']]
         
         print(f"\n{'='*80}")
         print(f"FETCHING {len(to_visit)} LINKS")
@@ -263,52 +314,88 @@ class PremeraSeleniumExtractor:
             
             if result:
                 processed += 1
-                self.all_content[f"doc_{processed:03d}"] = result
+                key = f"doc_{processed:03d}_d{item['depth']}"
+                self.all_content[key] = result
                 
-                # Add child links
+                # Add child links if not at max depth
                 if item['depth'] < max_depth and result.get('child_links'):
-                    for child in result['child_links'][:max_links]:
+                    children_to_add = result['child_links'][:max_links_per_page]
+                    print(f"   → Queuing {len(children_to_add)} child links")
+                    
+                    for child in children_to_add:
                         if child['url'] not in self.visited_urls:
                             to_visit.append({
                                 'url': child['url'],
-                                'depth': item['depth'] + 1
+                                'depth': item['depth'] + 1,
+                                'source': f"Child of doc_{processed:03d}"
                             })
+            
+            # Small delay to be respectful
+            time.sleep(0.5)
+        
+        print(f"\n{'='*80}")
+        print(f"EXTRACTION COMPLETE - {processed} documents fetched")
+        print('='*80)
         
         return self.all_content
     
     def save_all_text(self, output_file: str):
-        """Save all text"""
+        """Save ALL extracted text to one file"""
+        total_chars = 0
+        
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write("="*80 + "\n")
             f.write("ALL EXTRACTED TEXT (SELENIUM)\n")
             f.write("="*80 + "\n\n")
             
-            # PDF
+            # PDF text
             if '_source_pdf' in self.all_content:
                 pdf = self.all_content['_source_pdf']
                 f.write("="*80 + "\n")
                 f.write(f"SOURCE PDF: {pdf['file']}\n")
+                f.write(f"Text Length: {pdf['text_length']} characters\n")
                 f.write("="*80 + "\n\n")
                 f.write(pdf.get('full_text', ''))
                 f.write("\n\n")
+                total_chars += pdf.get('text_length', 0)
             
-            # Documents
+            # All fetched documents
+            doc_num = 0
             for key, content in self.all_content.items():
-                if key == '_source_pdf' or content.get('status') != 'success':
+                if key == '_source_pdf':
+                    continue
+                if content.get('status') != 'success':
                     continue
                 
+                doc_num += 1
+                text = content.get('text', '')
+                total_chars += len(text)
+                
+                f.write("\n" + "="*80 + "\n")
+                f.write(f"DOCUMENT #{doc_num}\n")
                 f.write("="*80 + "\n")
-                f.write(f"URL: {content.get('url')}\n")
-                f.write(f"Title: {content.get('title')}\n")
-                f.write(f"Text: {content.get('text_length')} chars\n")
+                f.write(f"URL: {content.get('url', 'N/A')}\n")
+                f.write(f"Title: {content.get('title', 'N/A')}\n")
+                f.write(f"Depth: {content.get('depth', 'N/A')}\n")
+                f.write(f"Text Length: {len(text)} characters\n")
                 f.write("-"*80 + "\n\n")
-                f.write(content.get('text', ''))
-                f.write("\n\n")
+                
+                # WRITE FULL TEXT - NO TRUNCATION
+                f.write(text)
+                
+                f.write("\n\n" + "-"*80 + "\n")
+                f.write("END OF DOCUMENT\n")
+                f.write("-"*80 + "\n")
+            
+            f.write("\n\n" + "="*80 + "\n")
+            f.write(f"TOTAL: {doc_num} documents, {total_chars:,} characters\n")
+            f.write("="*80 + "\n")
         
         print(f"✓ Saved: {output_file}")
+        print(f"   Total: {doc_num} docs, {total_chars:,} characters")
     
     def save_json(self, output_file: str):
-        """Save JSON"""
+        """Save complete data as JSON"""
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(self.all_content, f, indent=2, ensure_ascii=False)
         print(f"✓ Saved: {output_file}")
@@ -316,19 +403,24 @@ class PremeraSeleniumExtractor:
     def close(self):
         """Close browser"""
         if self.driver:
-            self.driver.quit()
-            print("✓ Browser closed")
+            try:
+                self.driver.quit()
+                print("✓ Browser closed")
+            except:
+                pass
 
 def main():
     print("="*80)
-    print("PREMERA SELENIUM EXTRACTOR")
-    print("For JavaScript-rendered pages")
+    print("PREMERA SELENIUM EXTRACTOR (Edge Browser)")
+    print("Uses Microsoft Edge - no download needed!")
     print("="*80)
     
+    # Configuration
     username = os.getenv('PREMERA_USERNAME', 'hareesha.thippaih@premera.com')
     password = os.getenv('PREMERA_PASSWORD', 'Narasamma@65')
     login_url = os.getenv('PREMERA_LOGIN_URL', 'https://premera.zavanta.com/portal/login')
     
+    # PDF file
     pdf_file = input("\nPDF filename (Enter for default): ").strip()
     if not pdf_file:
         pdf_file = "BC - Determine If BlueCard Claim2 - P966.pdf"
@@ -337,44 +429,64 @@ def main():
         print(f"\n❌ Not found: {pdf_file}")
         return
     
+    print(f"\n📄 PDF: {pdf_file}")
+    print(f"👤 User: {username}")
+    
     extractor = PremeraSeleniumExtractor(pdf_file)
     
     try:
         # Setup browser
-        headless = input("Run headless? (Y/n): ").strip().lower() != 'n'
+        headless_input = input("\nRun browser hidden? (Y/n): ").strip().lower()
+        headless = headless_input != 'n'
+        
         extractor.setup_browser(headless=headless)
         
         # Login
         extractor.login_to_portal(login_url, username, password)
         
+        # Settings
+        max_depth = input("\nMax depth (Enter for 2): ").strip()
+        max_depth = int(max_depth) if max_depth else 2
+        
+        max_links = input("Max child links/page (Enter for 10): ").strip()
+        max_links = int(max_links) if max_links else 10
+        
         # Extract
-        results = extractor.extract_all(max_depth=2, max_links=10)
+        results = extractor.extract_all(max_depth=max_depth, max_links_per_page=max_links)
         
         # Save
         os.makedirs('output', exist_ok=True)
-        extractor.save_all_text('output/ALL_TEXT_SELENIUM.txt')
-        extractor.save_json('output/data_selenium.json')
+        extractor.save_all_text('output/ALL_EXTRACTED_TEXT.txt')
+        extractor.save_json('output/complete_data.json')
         
         # Summary
         successful = sum(1 for k, c in results.items() 
                         if k != '_source_pdf' and c.get('status') == 'success')
-        total_text = sum(c.get('text_length', 0) for c in results.values())
+        total_text = sum(c.get('text_length', 0) for c in results.values() if isinstance(c, dict))
         
         print(f"\n{'='*80}")
-        print("✅ COMPLETE!")
+        print("✅ EXTRACTION COMPLETE!")
         print('='*80)
-        print(f"Documents: {successful}")
-        print(f"Total text: {total_text:,} characters")
-        print(f"\n📁 Output:")
-        print(f"   ⭐ output/ALL_TEXT_SELENIUM.txt")
-        print(f"   📊 output/data_selenium.json")
+        print(f"\n📊 Summary:")
+        print(f"   • Documents fetched: {successful}")
+        print(f"   • Total text: {total_text:,} characters")
+        print(f"   • URLs visited: {len(extractor.visited_urls)}")
+        print(f"\n📁 Output files:")
+        print(f"   ⭐ output/ALL_EXTRACTED_TEXT.txt")
+        print(f"   📊 output/complete_data.json")
         
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         extractor.close()
 
 if __name__ == "__main__":
     try:
         main()
+    except KeyboardInterrupt:
+        print("\n\nInterrupted")
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
