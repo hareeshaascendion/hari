@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlparse
 # =====================================================
 # WINDOWS PDF PATH
 # =====================================================
-PDF_PATH = r"C:\Users\hareesha.thippaih\Documents\BC_Determine_If_BlueCard_Claim_P966.pdf"
+PDF_PATH = r"C:\Users\US67251\OneDrive - Premera Blue Cross\Desktop\Premera\p966_claim\hari_new\BC - Determine If BlueCard Claim2 - P966.pdf"
 
 # =====================================================
 # HARDCODED CREDENTIALS (AS REQUESTED)
@@ -21,17 +21,21 @@ PORTAL_DOMAIN = "premera.zavanta.com"
 
 
 # -----------------------------------------------------
-# PDF TEXT + LINK EXTRACTION
+# PDF TEXT + LINK EXTRACTION (FIXED)
 # -----------------------------------------------------
 def extract_pdf_content(pdf_path):
+    # Open document for links
     doc = fitz.open(pdf_path)
+
+    # ✅ CORRECT: convert full PDF to markdown ONCE
+    markdown_pages = pymupdf4llm.to_markdown(pdf_path)
+
     pdf_data = {
         "file_name": os.path.basename(pdf_path),
         "pages": []
     }
 
-    for page_num, page in enumerate(doc, start=1):
-        text = pymupdf4llm.to_markdown(page)
+    for page_index, page in enumerate(doc):
         links = []
 
         for link in page.get_links():
@@ -42,8 +46,8 @@ def extract_pdf_content(pdf_path):
                 })
 
         pdf_data["pages"].append({
-            "page_number": page_num,
-            "text": text,
+            "page_number": page_index + 1,
+            "text": markdown_pages[page_index],
             "links": links
         })
 
@@ -81,10 +85,10 @@ def extract_html_text(session, url, parent_url=None, visited=None):
 
     visited.add(url)
 
-    resp = session.get(url, timeout=30)
-    resp.raise_for_status()
+    response = session.get(url, timeout=30)
+    response.raise_for_status()
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(response.text, "lxml")
     page_text = soup.get_text(separator=" ", strip=True)
 
     child_urls = set()
@@ -102,16 +106,16 @@ def extract_html_text(session, url, parent_url=None, visited=None):
 
 
 # -----------------------------------------------------
-# PIPELINE
+# MAIN PIPELINE
 # -----------------------------------------------------
 def run_pipeline():
-    output = {}
+    final_output = {}
 
-    # Step 1: PDF extraction
+    # Step 1: Extract PDF content
     pdf_data = extract_pdf_content(PDF_PATH)
-    output["pdf"] = pdf_data
+    final_output["pdf"] = pdf_data
 
-    # Step 2: Collect Zavanta links
+    # Step 2: Collect Zavanta links from PDF
     portal_links = {
         link["url"]
         for page in pdf_data["pages"]
@@ -119,21 +123,27 @@ def run_pipeline():
         if PORTAL_DOMAIN in link["url"]
     }
 
-    # Step 3: Portal + child HTML
+    # Step 3: Extract portal + child HTML
     session = create_portal_session()
     visited = set()
     portal_results = []
 
     for url in portal_links:
-        page_data = extract_html_text(session, url, parent_url="PDF", visited=visited)
+        page_data = extract_html_text(
+            session=session,
+            url=url,
+            parent_url="PDF",
+            visited=visited
+        )
+
         if not page_data:
             continue
 
         child_pages = []
         for child_url in page_data["child_links"]:
             child_data = extract_html_text(
-                session,
-                child_url,
+                session=session,
+                url=child_url,
                 parent_url=url,
                 visited=visited
             )
@@ -143,12 +153,12 @@ def run_pipeline():
         page_data["child_links"] = child_pages
         portal_results.append(page_data)
 
-    output["portal_html"] = portal_results
-    return output
+    final_output["portal_html"] = portal_results
+    return final_output
 
 
 # -----------------------------------------------------
-# RUN
+# RUN SCRIPT
 # -----------------------------------------------------
 if __name__ == "__main__":
     result = run_pipeline()
@@ -156,4 +166,4 @@ if __name__ == "__main__":
     with open("extracted_output.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
 
-    print("✅ Extraction completed: extracted_output.json")
+    print("✅ SUCCESS: extracted_output.json generated")
