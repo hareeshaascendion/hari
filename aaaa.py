@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
 # =====================================================
-# DISABLE SSL WARNINGS (CORPORATE CERTS)
+# SSL FIX (CORPORATE / SELF-SIGNED CERTS)
 # =====================================================
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -18,7 +18,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 PDF_PATH = r"C:\Users\US67251\OneDrive - Premera Blue Cross\Desktop\Premera\p966_claim\hari_new\BC - Determine If BlueCard Claim2 - P966.pdf"
 
 # =====================================================
-# HARDCODED CREDENTIALS
+# HARDCODED CREDENTIALS (AS REQUESTED)
 # =====================================================
 USERNAME = "hareesha.thippaih@premera.com"
 PASSWORD = "Narasamma@65"
@@ -27,12 +27,12 @@ PORTAL_DOMAIN = "premera.zavanta.com"
 
 
 # -----------------------------------------------------
-# PDF TEXT + LINK EXTRACTION (FIXED)
+# PDF TEXT + LINK EXTRACTION (CORRECT pymupdf4llm USAGE)
 # -----------------------------------------------------
 def extract_pdf_content(pdf_path):
     doc = fitz.open(pdf_path)
 
-    # Correct pymupdf4llm usage
+    # Convert entire PDF to markdown ONCE
     markdown_pages = pymupdf4llm.to_markdown(pdf_path)
 
     pdf_data = {
@@ -42,7 +42,6 @@ def extract_pdf_content(pdf_path):
 
     for page_index, page in enumerate(doc):
         links = []
-
         for link in page.get_links():
             if link.get("uri"):
                 links.append({
@@ -72,52 +71,58 @@ def create_portal_session():
         "password": PASSWORD
     }
 
-    # 🔴 SSL FIX IS HERE
     response = session.post(
         login_url,
         data=payload,
         timeout=30,
-        verify=False  # ✅ FIX
+        verify=False
     )
     response.raise_for_status()
-
     return session
 
 
 # -----------------------------------------------------
-# HTML + CHILD LINK EXTRACTION (SSL FIXED)
+# RECURSIVE HTML CRAWLER (FIXES CHILD TEXT ISSUE)
 # -----------------------------------------------------
-def extract_html_text(session, url, parent_url=None, visited=None):
-    if visited is None:
-        visited = set()
+def crawl_zavanta_pages(session, start_url, visited, max_depth=2, depth=0, parent_url=None):
+    if depth > max_depth:
+        return []
 
-    if url in visited:
-        return None
+    if start_url in visited:
+        return []
 
-    visited.add(url)
+    visited.add(start_url)
 
-    response = session.get(
-        url,
-        timeout=30,
-        verify=False  # ✅ FIX
-    )
-    response.raise_for_status()
+    try:
+        response = session.get(start_url, timeout=30, verify=False)
+        response.raise_for_status()
+    except Exception:
+        return []
 
     soup = BeautifulSoup(response.text, "lxml")
     page_text = soup.get_text(separator=" ", strip=True)
 
-    child_urls = set()
-    for a in soup.find_all("a", href=True):
-        full_url = urljoin(url, a["href"])
-        if PORTAL_DOMAIN in urlparse(full_url).netloc:
-            child_urls.add(full_url)
-
-    return {
-        "url": url,
+    results = [{
+        "url": start_url,
         "parent_url": parent_url,
-        "text": page_text,
-        "child_links": list(child_urls)
-    }
+        "text": page_text
+    }]
+
+    for a in soup.find_all("a", href=True):
+        next_url = urljoin(start_url, a["href"])
+        if PORTAL_DOMAIN in urlparse(next_url).netloc:
+            results.extend(
+                crawl_zavanta_pages(
+                    session=session,
+                    start_url=next_url,
+                    visited=visited,
+                    max_depth=max_depth,
+                    depth=depth + 1,
+                    parent_url=start_url
+                )
+            )
+
+    return results
 
 
 # -----------------------------------------------------
@@ -126,11 +131,11 @@ def extract_html_text(session, url, parent_url=None, visited=None):
 def run_pipeline():
     final_output = {}
 
-    # Step 1: PDF
+    # Step 1: PDF extraction
     pdf_data = extract_pdf_content(PDF_PATH)
     final_output["pdf"] = pdf_data
 
-    # Step 2: Collect Zavanta links
+    # Step 2: Collect Zavanta links from PDF
     portal_links = {
         link["url"]
         for page in pdf_data["pages"]
@@ -138,35 +143,19 @@ def run_pipeline():
         if PORTAL_DOMAIN in link["url"]
     }
 
-    # Step 3: Portal + child pages
+    # Step 3: Recursive portal + child HTML extraction
     session = create_portal_session()
     visited = set()
     portal_results = []
 
     for url in portal_links:
-        page_data = extract_html_text(
+        extracted_pages = crawl_zavanta_pages(
             session=session,
-            url=url,
-            parent_url="PDF",
-            visited=visited
+            start_url=url,
+            visited=visited,
+            max_depth=2   # Increase to 3 if deeper nesting exists
         )
-
-        if not page_data:
-            continue
-
-        child_pages = []
-        for child_url in page_data["child_links"]:
-            child_data = extract_html_text(
-                session=session,
-                url=child_url,
-                parent_url=url,
-                visited=visited
-            )
-            if child_data:
-                child_pages.append(child_data)
-
-        page_data["child_links"] = child_pages
-        portal_results.append(page_data)
+        portal_results.extend(extracted_pages)
 
     final_output["portal_html"] = portal_results
     return final_output
