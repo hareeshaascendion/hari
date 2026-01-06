@@ -1409,9 +1409,7 @@ class GraphVisualizerV2:
     
     @staticmethod
     def to_html_interactive(network: WorldNetwork) -> str:
-        """Generate interactive HTML visualization using vis.js"""
-        nodes_json = []
-        edges_json = []
+        """Generate interactive HTML visualization - self-contained with inline SVG"""
         
         colors = {
             'root': '#4caf50',
@@ -1425,69 +1423,312 @@ class GraphVisualizerV2:
             'step': '#90a4ae'
         }
         
+        # Build nodes data
+        nodes_data = []
         for node_id, node in network.nodes.items():
-            label = node.content[:40]
+            label = node.content[:50].replace('"', "'").replace('<', '&lt;').replace('>', '&gt;')
             if node.step_number:
-                label = f"S{node.step_number}: {label}"
+                label = f"Step {node.step_number}: {label}"
             
-            nodes_json.append({
+            nodes_data.append({
                 'id': node_id,
                 'label': label,
+                'type': node.node_type.value,
                 'color': colors.get(node.node_type.value, '#cccccc'),
-                'shape': 'diamond' if node.node_type == NodeType.DECISION else 'box',
-                'title': f"{node.node_type.value}\\n{node.content[:100]}"
+                'section': node.section or '',
+                'fullContent': node.content[:200].replace('"', "'").replace('<', '&lt;').replace('>', '&gt;')
             })
         
+        edges_data = []
         for edge_id, edge in network.edges.items():
-            edges_json.append({
-                'from': edge.source_id,
-                'to': edge.target_id,
+            edges_data.append({
+                'source': edge.source_id,
+                'target': edge.target_id,
                 'label': edge.condition or '',
-                'arrows': 'to'
+                'type': edge.edge_type.value
             })
+        
+        # Create claim type summary
+        claim_types_html = ""
+        for ct_name, ct_root in network.claim_type_roots.items():
+            claim_types_html += f'<div class="claim-type-item" onclick="filterByClaimType(\'{ct_name}\')">{ct_name}</div>'
         
         html = f'''<!DOCTYPE html>
 <html>
 <head>
     <title>World Network - {network.document_name}</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/vis-network.min.js"></script>
     <style>
-        body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; }}
-        #network {{ width: 100%; height: 800px; border: 1px solid #ccc; }}
-        .info {{ margin-bottom: 20px; }}
-        .legend {{ display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 20px; }}
-        .legend-item {{ display: flex; align-items: center; gap: 5px; }}
-        .legend-color {{ width: 20px; height: 20px; border-radius: 3px; }}
+        * {{ box-sizing: border-box; }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: #f5f5f5;
+        }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        h1 {{ color: #1a1a1a; margin-bottom: 10px; }}
+        .info {{ 
+            background: white; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .info-row {{ display: flex; gap: 20px; flex-wrap: wrap; }}
+        .info-item {{ }}
+        .info-label {{ font-weight: 600; color: #666; }}
+        .info-value {{ color: #1a1a1a; }}
+        
+        .legend {{ 
+            display: flex; 
+            gap: 15px; 
+            flex-wrap: wrap; 
+            margin-bottom: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .legend-item {{ display: flex; align-items: center; gap: 8px; font-size: 14px; }}
+        .legend-color {{ width: 16px; height: 16px; border-radius: 4px; }}
+        
+        .main-content {{ display: flex; gap: 20px; }}
+        
+        .sidebar {{
+            width: 280px;
+            flex-shrink: 0;
+        }}
+        .sidebar-section {{
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .sidebar-title {{ font-weight: 600; margin-bottom: 10px; color: #333; }}
+        .claim-type-item {{
+            padding: 8px 12px;
+            margin: 5px 0;
+            background: #f0f0f0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }}
+        .claim-type-item:hover {{ background: #e0e0e0; }}
+        .claim-type-item.active {{ background: #2196f3; color: white; }}
+        
+        .graph-container {{
+            flex: 1;
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: auto;
+            max-height: 800px;
+        }}
+        
+        .node-list {{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }}
+        .node-card {{
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px;
+            background: #fafafa;
+        }}
+        .node-card:hover {{ background: #f0f0f0; }}
+        .node-header {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }}
+        .node-type-badge {{
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: white;
+        }}
+        .node-id {{ font-size: 12px; color: #888; }}
+        .node-content {{ font-size: 14px; color: #333; line-height: 1.4; }}
+        .node-section {{ font-size: 12px; color: #666; margin-top: 6px; }}
+        
+        .edges-list {{
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed #ddd;
+        }}
+        .edge-item {{
+            font-size: 12px;
+            color: #555;
+            padding: 2px 0;
+        }}
+        .edge-label {{
+            background: #e3f2fd;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-weight: 500;
+        }}
+        
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }}
+        .stat-item {{
+            text-align: center;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 6px;
+        }}
+        .stat-value {{ font-size: 24px; font-weight: 600; color: #2196f3; }}
+        .stat-label {{ font-size: 12px; color: #666; }}
+        
+        .filter-input {{
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }}
+        .filter-input:focus {{ outline: none; border-color: #2196f3; }}
     </style>
 </head>
 <body>
-    <h1>World Network: {network.document_name}</h1>
-    <div class="info">
-        <strong>Document:</strong> {network.document_id} | 
-        <strong>Version:</strong> {network.current_version} |
-        <strong>Nodes:</strong> {len(network.nodes)} |
-        <strong>Edges:</strong> {len(network.edges)}
+    <div class="container">
+        <h1>🌐 World Network: {network.document_name}</h1>
+        
+        <div class="info">
+            <div class="info-row">
+                <div class="info-item"><span class="info-label">Document ID:</span> <span class="info-value">{network.document_id}</span></div>
+                <div class="info-item"><span class="info-label">Version:</span> <span class="info-value">{network.current_version}</span></div>
+                <div class="info-item"><span class="info-label">Status:</span> <span class="info-value">{network.metadata.get('status', 'N/A')}</span></div>
+            </div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item"><div class="legend-color" style="background:{colors['decision']}"></div>Decision</div>
+            <div class="legend-item"><div class="legend-color" style="background:{colors['branch_yes']}"></div>Yes</div>
+            <div class="legend-item"><div class="legend-color" style="background:{colors['branch_no']}"></div>No</div>
+            <div class="legend-item"><div class="legend-color" style="background:{colors['branch_unsure']}"></div>Unsure</div>
+            <div class="legend-item"><div class="legend-color" style="background:{colors['claim_type']}"></div>Claim Type</div>
+            <div class="legend-item"><div class="legend-color" style="background:{colors['action']}"></div>Action</div>
+            <div class="legend-item"><div class="legend-color" style="background:{colors['reference']}"></div>Reference</div>
+        </div>
+        
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="sidebar-section">
+                    <div class="sidebar-title">📊 Statistics</div>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value">{len(network.nodes)}</div>
+                            <div class="stat-label">Nodes</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">{len(network.edges)}</div>
+                            <div class="stat-label">Edges</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">{len(network.claim_type_roots)}</div>
+                            <div class="stat-label">Claim Types</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">{len(network.procedure_refs)}</div>
+                            <div class="stat-label">References</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="sidebar-section">
+                    <div class="sidebar-title">📋 Claim Types</div>
+                    <div class="claim-type-item active" onclick="filterByClaimType('all')">All Claim Types</div>
+                    {claim_types_html}
+                </div>
+            </div>
+            
+            <div class="graph-container">
+                <input type="text" class="filter-input" placeholder="🔍 Search nodes..." oninput="filterNodes(this.value)">
+                <div id="nodeList" class="node-list"></div>
+            </div>
+        </div>
     </div>
-    <div class="legend">
-        <div class="legend-item"><div class="legend-color" style="background:{colors['decision']}"></div>Decision</div>
-        <div class="legend-item"><div class="legend-color" style="background:{colors['branch_yes']}"></div>Yes Branch</div>
-        <div class="legend-item"><div class="legend-color" style="background:{colors['branch_no']}"></div>No Branch</div>
-        <div class="legend-item"><div class="legend-color" style="background:{colors['claim_type']}"></div>Claim Type</div>
-        <div class="legend-item"><div class="legend-color" style="background:{colors['reference']}"></div>Reference</div>
-    </div>
-    <div id="network"></div>
+    
     <script>
-        var nodes = new vis.DataSet({json.dumps(nodes_json)});
-        var edges = new vis.DataSet({json.dumps(edges_json)});
-        var container = document.getElementById('network');
-        var data = {{ nodes: nodes, edges: edges }};
-        var options = {{
-            layout: {{ hierarchical: {{ direction: 'UD', sortMethod: 'directed', nodeSpacing: 150 }} }},
-            physics: false,
-            nodes: {{ font: {{ size: 12 }} }},
-            edges: {{ font: {{ size: 10 }}, smooth: {{ type: 'cubicBezier' }} }}
-        }};
-        var network = new vis.Network(container, data, options);
+        const nodesData = {json.dumps(nodes_data)};
+        const edgesData = {json.dumps(edges_data)};
+        
+        let currentFilter = 'all';
+        let searchTerm = '';
+        
+        function getEdgesForNode(nodeId) {{
+            return edgesData.filter(e => e.source === nodeId);
+        }}
+        
+        function renderNodes() {{
+            const container = document.getElementById('nodeList');
+            let filtered = nodesData;
+            
+            // Filter by claim type
+            if (currentFilter !== 'all') {{
+                filtered = filtered.filter(n => n.section === currentFilter || n.type === 'root');
+            }}
+            
+            // Filter by search term
+            if (searchTerm) {{
+                const term = searchTerm.toLowerCase();
+                filtered = filtered.filter(n => 
+                    n.label.toLowerCase().includes(term) || 
+                    n.id.toLowerCase().includes(term) ||
+                    n.fullContent.toLowerCase().includes(term)
+                );
+            }}
+            
+            container.innerHTML = filtered.map(node => {{
+                const edges = getEdgesForNode(node.id);
+                const edgesHtml = edges.length > 0 ? `
+                    <div class="edges-list">
+                        ${{edges.map(e => `
+                            <div class="edge-item">
+                                → ${{e.label ? `<span class="edge-label">${{e.label}}</span>` : ''}} ${{e.target}}
+                            </div>
+                        `).join('')}}
+                    </div>
+                ` : '';
+                
+                return `
+                    <div class="node-card">
+                        <div class="node-header">
+                            <span class="node-type-badge" style="background:${{node.color}}">${{node.type}}</span>
+                            <span class="node-id">${{node.id}}</span>
+                        </div>
+                        <div class="node-content">${{node.label}}</div>
+                        ${{node.section ? `<div class="node-section">📁 ${{node.section}}</div>` : ''}}
+                        ${{edgesHtml}}
+                    </div>
+                `;
+            }}).join('');
+        }}
+        
+        function filterByClaimType(claimType) {{
+            currentFilter = claimType;
+            document.querySelectorAll('.claim-type-item').forEach(el => el.classList.remove('active'));
+            event.target.classList.add('active');
+            renderNodes();
+        }}
+        
+        function filterNodes(term) {{
+            searchTerm = term;
+            renderNodes();
+        }}
+        
+        // Initial render
+        renderNodes();
     </script>
 </body>
 </html>'''
