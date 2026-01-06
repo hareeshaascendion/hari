@@ -609,12 +609,12 @@ def main():
     print("="*80)
     
     username = os.getenv('PREMERA_USERNAME', 'hareesha.thippaih@premera.com')
-    password = os.getenv('PREMERA_PASSWORD', 'Narasamma@65')
+    password = os.getenv('PREMERA_PASSWORD', '*******')
     login_url = os.getenv('PREMERA_LOGIN_URL', 'https://premera.zavanta.com/portal/login')
     
     pdf_file = input("\nPDF filename (Enter for default): ").strip()
     if not pdf_file:
-        pdf_file = "BC - Determine If BlueCard Claim2 - P966.pdf"
+        pdf_file = "BC - Determine If BlueCard Claim - P966_v4.pdf"
     
     if not os.path.exists(pdf_file):
         print(f"\n❌ Not found: {pdf_file}")
