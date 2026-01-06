@@ -1,8 +1,8 @@
 """
-Premera FULL Extractor - FIXED Session Handling
+Premera PR.OP.CL Extractor - Only extracts PR.OP.CL procedure documents
+- Filters links to only process PR.OP.CL procedures
 - Auto-restarts browser if it crashes
 - Skips external/non-Zavanta URLs
-- Better error handling
 """
 import pymupdf4llm
 import pymupdf as fitz
@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class PremeraFullExtractor:
+class PremeraPROPCLExtractor:
     def __init__(self, pdf_path: str):
         self.pdf_path = pdf_path
         self.visited_urls = set()
@@ -31,11 +31,12 @@ class PremeraFullExtractor:
         self.total_extracted = 0
         self.failed_urls = []
         self.skipped_urls = []
+        self.filtered_urls = []  # URLs filtered out (not PR.OP.CL)
         self.requests_count = 0
-        self.max_requests_before_restart = 50  # Restart browser every 50 requests
+        self.max_requests_before_restart = 50
         self.headless = True
         
-        # Allowed domains - only extract from these
+        # Allowed domains
         self.allowed_domains = [
             'premera.zavanta.com',
             'zavanta.com'
@@ -49,18 +50,31 @@ class PremeraFullExtractor:
             'google.com',
             'youtube.com'
         ]
+        
+        # PR.OP.CL pattern - matches PR.OP.CL followed by numbers/letters
+        self.prop_cl_pattern = re.compile(r'PR\.OP\.CL', re.IGNORECASE)
+    
+    def is_prop_cl_link(self, url: str, anchor_text: str = "") -> bool:
+        """Check if URL or anchor text contains PR.OP.CL pattern"""
+        # Check in URL
+        if self.prop_cl_pattern.search(url):
+            return True
+        
+        # Check in anchor text
+        if anchor_text and self.prop_cl_pattern.search(anchor_text):
+            return True
+        
+        return False
     
     def is_allowed_url(self, url: str) -> bool:
-        """Check if URL should be processed"""
+        """Check if URL should be processed (domain check only)"""
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
         
-        # Check if should skip
         for skip in self.skip_domains:
             if skip in domain:
                 return False
         
-        # Check if allowed
         for allowed in self.allowed_domains:
             if allowed in domain:
                 return True
@@ -86,7 +100,6 @@ class PremeraFullExtractor:
         options.add_argument('--disable-extensions')
         options.add_argument('--no-first-run')
         options.add_argument('--disable-default-apps')
-        # Reduce memory usage
         options.add_argument('--disable-background-networking')
         options.add_argument('--disable-sync')
         options.add_argument('--disable-translate')
@@ -139,7 +152,6 @@ class PremeraFullExtractor:
             
             print(f"Current URL: {self.driver.current_url}")
             
-            # Look for login fields
             username_selectors = [
                 'input[name*="user"]', 'input[name*="email"]',
                 'input[type="email"]', '#username', '#email'
@@ -185,7 +197,6 @@ class PremeraFullExtractor:
                 password_field.send_keys(password)
                 time.sleep(0.5)
                 
-                # Find submit
                 for sel in ['button[type="submit"]', 'input[type="submit"]', 'button']:
                     try:
                         elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
@@ -209,9 +220,9 @@ class PremeraFullExtractor:
             return True
     
     def extract_pdf_content(self):
-        """Extract PDF text and hyperlinks"""
+        """Extract PDF text and hyperlinks - filter for PR.OP.CL only"""
         print(f"\n{'='*80}")
-        print("EXTRACTING PDF")
+        print("EXTRACTING PDF - Filtering for PR.OP.CL procedures only")
         print('='*80)
         
         markdown_text = pymupdf4llm.to_markdown(self.pdf_path)
@@ -237,37 +248,54 @@ class PremeraFullExtractor:
         
         doc.close()
         
-        # Filter hyperlinks - only Zavanta URLs
-        zavanta_links = [l for l in hyperlinks if self.is_allowed_url(l['url'])]
-        skipped_links = [l for l in hyperlinks if not self.is_allowed_url(l['url'])]
+        # Filter hyperlinks
+        prop_cl_links = []
+        external_links = []
+        other_zavanta_links = []
+        
+        for link in hyperlinks:
+            if not self.is_allowed_url(link['url']):
+                external_links.append(link)
+                self.skipped_urls.append(link['url'])
+            elif self.is_prop_cl_link(link['url'], link['anchor_text']):
+                prop_cl_links.append(link)
+            else:
+                other_zavanta_links.append(link)
+                self.filtered_urls.append({
+                    'url': link['url'],
+                    'anchor_text': link['anchor_text'],
+                    'reason': 'Not PR.OP.CL procedure'
+                })
         
         print(f"✓ PDF text: {len(markdown_text):,} characters")
-        print(f"✓ Total hyperlinks: {len(hyperlinks)}")
-        print(f"✓ Zavanta links (will process): {len(zavanta_links)}")
-        print(f"⊗ External links (skipped): {len(skipped_links)}")
+        print(f"✓ Total hyperlinks found: {len(hyperlinks)}")
+        print(f"\n📋 Link Classification:")
+        print(f"   ✅ PR.OP.CL links (will process): {len(prop_cl_links)}")
+        print(f"   ⊗ Other Zavanta links (filtered): {len(other_zavanta_links)}")
+        print(f"   ⊗ External links (skipped): {len(external_links)}")
         
-        if skipped_links:
-            print(f"\nSkipped external URLs:")
-            for link in skipped_links[:5]:
-                print(f"   - {link['url'][:60]}")
-                self.skipped_urls.append(link['url'])
-            if len(skipped_links) > 5:
-                print(f"   ... and {len(skipped_links) - 5} more")
+        if prop_cl_links:
+            print(f"\n🎯 PR.OP.CL links to process:")
+            for i, link in enumerate(prop_cl_links, 1):
+                anchor = link['anchor_text'][:50] if link['anchor_text'] else 'No anchor text'
+                print(f"   {i}. {anchor}")
+                print(f"      URL: {link['url'][:70]}")
         
-        print(f"\nZavanta links to process:")
-        for i, link in enumerate(zavanta_links[:10], 1):
-            print(f"   {i}. {link['url'][:70]}")
-        if len(zavanta_links) > 10:
-            print(f"   ... and {len(zavanta_links) - 10} more")
+        if other_zavanta_links:
+            print(f"\n⊗ Filtered Zavanta links (not PR.OP.CL):")
+            for link in other_zavanta_links[:10]:
+                anchor = link['anchor_text'][:50] if link['anchor_text'] else 'No anchor text'
+                print(f"   - {anchor}")
+            if len(other_zavanta_links) > 10:
+                print(f"   ... and {len(other_zavanta_links) - 10} more")
         
-        return {'markdown_text': markdown_text, 'hyperlinks': zavanta_links}
+        return {'markdown_text': markdown_text, 'hyperlinks': prop_cl_links}
     
     def extract_text_from_page(self):
         """Extract ALL text from current page"""
         try:
             time.sleep(2)
             
-            # Scroll to load content
             try:
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1)
@@ -278,11 +306,9 @@ class PremeraFullExtractor:
             page_source = self.driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
             
-            # Remove unwanted
             for tag in soup.find_all(['script', 'style', 'noscript', 'svg', 'path']):
                 tag.decompose()
             
-            # Try content containers
             text = ""
             for selector in ['main', 'article', '#content', '.content', 
                            '.document-content', '.page-content', '[role="main"]']:
@@ -297,7 +323,6 @@ class PremeraFullExtractor:
                 except:
                     continue
             
-            # Fallback to body
             if len(text) < 200:
                 body = soup.find('body')
                 if body:
@@ -305,7 +330,6 @@ class PremeraFullExtractor:
                         unwanted.decompose()
                     text = body.get_text(separator='\n', strip=True)
             
-            # Clean
             text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
             text = text.strip()
             
@@ -316,7 +340,7 @@ class PremeraFullExtractor:
             return "", ""
     
     def get_child_links(self, base_url: str, page_source: str):
-        """Get child links - only from allowed domains"""
+        """Get child links - only PR.OP.CL from allowed domains"""
         links = []
         seen = set()
         
@@ -334,8 +358,13 @@ class PremeraFullExtractor:
             if parsed.query:
                 clean_url += f"?{parsed.query}"
             
-            # Only allowed domains
             if not self.is_allowed_url(clean_url):
+                continue
+            
+            anchor_text = a_tag.get_text(strip=True)[:100]
+            
+            # Only include PR.OP.CL links
+            if not self.is_prop_cl_link(clean_url, anchor_text):
                 continue
             
             if clean_url in seen or clean_url in self.visited_urls:
@@ -344,7 +373,7 @@ class PremeraFullExtractor:
             seen.add(clean_url)
             links.append({
                 'url': clean_url,
-                'text': a_tag.get_text(strip=True)[:100]
+                'text': anchor_text
             })
         
         return links
@@ -354,7 +383,6 @@ class PremeraFullExtractor:
         if url in self.visited_urls:
             return None
         
-        # Check if URL is allowed
         if not self.is_allowed_url(url):
             print(f"   ⊗ Skipping external URL: {url[:50]}")
             self.skipped_urls.append(url)
@@ -363,14 +391,12 @@ class PremeraFullExtractor:
         self.visited_urls.add(url)
         self.requests_count += 1
         
-        # Restart browser periodically
         if self.requests_count >= self.max_requests_before_restart:
             print(f"\n🔄 Browser restart (processed {self.requests_count} requests)")
             if not self.restart_browser():
                 print("   ✗ Failed to restart browser")
                 return None
         
-        # Check if browser is alive
         if not self.is_browser_alive():
             print(f"\n⚠️ Browser session lost - restarting...")
             if not self.restart_browser():
@@ -396,7 +422,7 @@ class PremeraFullExtractor:
             text, page_source = self.extract_text_from_page()
             child_links = self.get_child_links(url, page_source)
             
-            print(f"{indent}   ✓ Text: {len(text):,} chars | Children: {len(child_links)}")
+            print(f"{indent}   ✓ Text: {len(text):,} chars | PR.OP.CL Children: {len(child_links)}")
             
             if len(text) > 0:
                 preview = text[:80].replace('\n', ' ')
@@ -418,7 +444,6 @@ class PremeraFullExtractor:
         except InvalidSessionIdException as e:
             print(f"{indent}   ⚠️ Session lost - restarting browser...")
             if self.restart_browser():
-                # Retry this URL
                 self.visited_urls.discard(url)
                 self.total_extracted -= 1
                 return self.fetch_url(url, depth, source)
@@ -446,34 +471,33 @@ class PremeraFullExtractor:
             return None
     
     def extract_all(self, max_depth: int = 3):
-        """Extract everything"""
+        """Extract PR.OP.CL procedures only"""
         print(f"\n{'='*80}")
-        print("FULL RECURSIVE EXTRACTION")
+        print("PR.OP.CL PROCEDURE EXTRACTION")
         print(f"Max depth: {max_depth}")
-        print(f"Allowed domains: {', '.join(self.allowed_domains)}")
+        print(f"Filter: Only PR.OP.CL procedure links")
         print('='*80)
         
-        # Extract PDF
         pdf_data = self.extract_pdf_content()
         
         self.all_content['_source_pdf'] = {
             'file': self.pdf_path,
             'full_text': pdf_data['markdown_text'],
             'text_length': len(pdf_data['markdown_text']),
-            'hyperlinks_count': len(pdf_data['hyperlinks'])
+            'hyperlinks_count': len(pdf_data['hyperlinks']),
+            'filter': 'PR.OP.CL procedures only'
         }
         
-        # Queue
         queue = []
         for link in pdf_data['hyperlinks']:
             queue.append({
                 'url': link['url'],
                 'depth': 0,
-                'source': f"PDF page {link['page']}"
+                'source': f"PDF page {link['page']} - {link['anchor_text'][:30]}"
             })
         
         print(f"\n{'='*80}")
-        print(f"STARTING - {len(queue)} Zavanta links to process")
+        print(f"STARTING - {len(queue)} PR.OP.CL links to process")
         print('='*80)
         
         while queue:
@@ -498,7 +522,6 @@ class PremeraFullExtractor:
                 key = f"doc_{result['doc_number']:04d}"
                 self.all_content[key] = result
                 
-                # Add children
                 if result.get('child_links'):
                     new_children = 0
                     for child in result['child_links']:
@@ -511,13 +534,13 @@ class PremeraFullExtractor:
                             new_children += 1
                     
                     if new_children > 0:
-                        print(f"   → +{new_children} children added")
+                        print(f"   → +{new_children} PR.OP.CL children added")
             
             time.sleep(0.3)
         
         print(f"\n{'='*80}")
         print("EXTRACTION COMPLETE")
-        print(f"Total: {self.total_extracted} | Failed: {len(self.failed_urls)} | Skipped: {len(self.skipped_urls)}")
+        print(f"Total PR.OP.CL: {self.total_extracted} | Failed: {len(self.failed_urls)} | Filtered: {len(self.filtered_urls)}")
         print('='*80)
         
         return self.all_content
@@ -529,21 +552,20 @@ class PremeraFullExtractor:
         
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write("="*80 + "\n")
-            f.write("ALL EXTRACTED TEXT\n")
+            f.write("PR.OP.CL PROCEDURES - EXTRACTED TEXT\n")
             f.write("="*80 + "\n\n")
             
-            # PDF
             if '_source_pdf' in self.all_content:
                 pdf = self.all_content['_source_pdf']
                 f.write("="*80 + "\n")
                 f.write(f"SOURCE PDF: {pdf['file']}\n")
                 f.write(f"Text: {pdf['text_length']:,} chars\n")
+                f.write(f"Filter: {pdf.get('filter', 'N/A')}\n")
                 f.write("-"*80 + "\n\n")
                 f.write(pdf.get('full_text', ''))
                 f.write("\n\n")
                 total_chars += pdf.get('text_length', 0)
             
-            # Documents
             docs = [(k, v) for k, v in self.all_content.items() 
                    if k != '_source_pdf' and isinstance(v, dict) and v.get('status') == 'success']
             docs.sort(key=lambda x: x[1].get('doc_number', 0))
@@ -554,23 +576,24 @@ class PremeraFullExtractor:
                 total_chars += len(text)
                 
                 f.write("\n" + "="*80 + "\n")
-                f.write(f"DOCUMENT #{content.get('doc_number', doc_count)}\n")
+                f.write(f"PR.OP.CL DOCUMENT #{content.get('doc_number', doc_count)}\n")
                 f.write("="*80 + "\n")
                 f.write(f"URL: {content.get('url', 'N/A')}\n")
                 f.write(f"Title: {content.get('title', 'N/A')}\n")
                 f.write(f"Depth: {content.get('depth', 0)}\n")
+                f.write(f"Source: {content.get('source', 'N/A')}\n")
                 f.write(f"Text: {len(text):,} chars\n")
                 f.write("-"*80 + "\n\n")
                 f.write(text)
                 f.write("\n\n")
             
-            # Summary
             f.write("\n" + "="*80 + "\n")
             f.write("SUMMARY\n")
             f.write("="*80 + "\n")
-            f.write(f"Documents: {doc_count}\n")
+            f.write(f"PR.OP.CL Documents: {doc_count}\n")
             f.write(f"Total chars: {total_chars:,}\n")
             f.write(f"Failed: {len(self.failed_urls)}\n")
+            f.write(f"Filtered (not PR.OP.CL): {len(self.filtered_urls)}\n")
             f.write(f"Skipped (external): {len(self.skipped_urls)}\n")
             
             if self.failed_urls:
@@ -578,18 +601,27 @@ class PremeraFullExtractor:
                 for fail in self.failed_urls[:20]:
                     f.write(f"   - {fail['url'][:60]}: {fail.get('error', '')[:50]}\n")
             
-            if self.skipped_urls:
-                f.write("\nSkipped external URLs:\n")
-                for url in self.skipped_urls[:20]:
-                    f.write(f"   - {url[:70]}\n")
+            if self.filtered_urls:
+                f.write("\nFiltered URLs (not PR.OP.CL):\n")
+                for item in self.filtered_urls[:20]:
+                    f.write(f"   - {item['anchor_text'][:40] or item['url'][:40]}\n")
+                if len(self.filtered_urls) > 20:
+                    f.write(f"   ... and {len(self.filtered_urls) - 20} more\n")
         
         print(f"\n✓ Saved: {output_file}")
-        print(f"   Documents: {doc_count} | Text: {total_chars:,} chars")
+        print(f"   PR.OP.CL Documents: {doc_count} | Text: {total_chars:,} chars")
     
     def save_json(self, output_file: str):
         """Save JSON"""
+        output_data = {
+            'filter': 'PR.OP.CL procedures only',
+            'content': self.all_content,
+            'filtered_urls': self.filtered_urls,
+            'skipped_urls': self.skipped_urls,
+            'failed_urls': self.failed_urls
+        }
         with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(self.all_content, f, indent=2, ensure_ascii=False)
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
         print(f"✓ Saved: {output_file}")
     
     def close(self):
@@ -603,9 +635,10 @@ class PremeraFullExtractor:
 
 def main():
     print("="*80)
-    print("PREMERA FULL EXTRACTOR - WITH SESSION RECOVERY")
+    print("PREMERA PR.OP.CL EXTRACTOR")
+    print("- Only extracts PR.OP.CL procedure documents")
     print("- Auto-restarts browser if it crashes")
-    print("- Skips external URLs (SharePoint, etc.)")
+    print("- Skips external URLs and non-PR.OP.CL links")
     print("="*80)
     
     username = os.getenv('PREMERA_USERNAME', 'hareesha.thippaih@premera.com')
@@ -622,8 +655,9 @@ def main():
     
     print(f"\n📄 PDF: {pdf_file}")
     print(f"👤 User: {username}")
+    print(f"🎯 Filter: PR.OP.CL procedures only")
     
-    extractor = PremeraFullExtractor(pdf_file)
+    extractor = PremeraPROPCLExtractor(pdf_file)
     
     try:
         headless = input("\nRun hidden? (Y/n): ").strip().lower() != 'n'
@@ -637,8 +671,8 @@ def main():
         results = extractor.extract_all(max_depth=max_depth)
         
         os.makedirs('output', exist_ok=True)
-        extractor.save_all_text('output/ALL_EXTRACTED_TEXT.txt')
-        extractor.save_json('output/complete_data.json')
+        extractor.save_all_text('output/PR_OP_CL_EXTRACTED_TEXT.txt')
+        extractor.save_json('output/pr_op_cl_data.json')
         
         successful = sum(1 for k, c in results.items() 
                         if k != '_source_pdf' and isinstance(c, dict) and c.get('status') == 'success')
@@ -649,13 +683,14 @@ def main():
         print("✅ COMPLETE!")
         print('='*80)
         print(f"\n📊 Results:")
-        print(f"   • Extracted: {successful}")
+        print(f"   • PR.OP.CL Extracted: {successful}")
         print(f"   • Total text: {total_text:,} chars")
         print(f"   • Failed: {len(extractor.failed_urls)}")
-        print(f"   • Skipped: {len(extractor.skipped_urls)}")
+        print(f"   • Filtered (not PR.OP.CL): {len(extractor.filtered_urls)}")
+        print(f"   • Skipped (external): {len(extractor.skipped_urls)}")
         print(f"\n📁 Output:")
-        print(f"   ⭐ output/ALL_EXTRACTED_TEXT.txt")
-        print(f"   📊 output/complete_data.json")
+        print(f"   ⭐ output/PR_OP_CL_EXTRACTED_TEXT.txt")
+        print(f"   📊 output/pr_op_cl_data.json")
         
     except Exception as e:
         print(f"\n❌ Error: {e}")
