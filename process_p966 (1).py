@@ -295,3 +295,4 @@ if __name__ == "__main__":
     output_dir = sys.argv[2] if len(sys.argv) > 2 else None
     
     main(pdf_path, output_dir)
+    
