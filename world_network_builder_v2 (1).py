@@ -1409,326 +1409,377 @@ class GraphVisualizerV2:
     
     @staticmethod
     def to_html_interactive(network: WorldNetwork) -> str:
-        """Generate interactive HTML visualization - self-contained with inline SVG"""
+        """Generate interactive HTML tree visualization using SVG (works in artifact viewer)"""
         
-        colors = {
-            'root': '#4caf50',
-            'claim_type': '#9c27b0',
-            'decision': '#2196f3',
-            'branch_yes': '#66bb6a',
-            'branch_no': '#ef5350',
-            'branch_unsure': '#ffa726',
-            'action': '#7986cb',
-            'reference': '#f48fb1',
-            'step': '#90a4ae'
-        }
-        
-        # Build nodes data
-        nodes_data = []
-        for node_id, node in network.nodes.items():
-            label = node.content[:50].replace('"', "'").replace('<', '&lt;').replace('>', '&gt;')
-            if node.step_number:
-                label = f"Step {node.step_number}: {label}"
+        # Build hierarchical tree data for each claim type
+        def build_tree(node_id, visited=None):
+            if visited is None:
+                visited = set()
+            if node_id in visited or node_id not in network.nodes:
+                return None
+            visited.add(node_id)
             
-            nodes_data.append({
+            node = network.nodes[node_id]
+            label = node.content[:40].replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', ' ')
+            if node.step_number:
+                label = f"S{node.step_number}: {label}"
+            
+            children = []
+            for edge in network.get_outgoing_edges(node_id):
+                child_tree = build_tree(edge.target_id, visited.copy())
+                if child_tree:
+                    child_tree['edgeLabel'] = (edge.condition or '').replace('"', '&quot;')
+                    children.append(child_tree)
+            
+            return {
                 'id': node_id,
-                'label': label,
+                'name': label,
                 'type': node.node_type.value,
-                'color': colors.get(node.node_type.value, '#cccccc'),
-                'section': node.section or '',
-                'fullContent': node.content[:200].replace('"', "'").replace('<', '&lt;').replace('>', '&gt;')
-            })
+                'fullContent': node.content[:150].replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', ' '),
+                'children': children
+            }
         
-        edges_data = []
-        for edge_id, edge in network.edges.items():
-            edges_data.append({
-                'source': edge.source_id,
-                'target': edge.target_id,
-                'label': edge.condition or '',
-                'type': edge.edge_type.value
-            })
+        # Build trees for each claim type
+        trees_data = {}
+        for claim_type, root_id in network.claim_type_roots.items():
+            tree = build_tree(root_id)
+            if tree:
+                trees_data[claim_type] = tree
         
-        # Create claim type summary
-        claim_types_html = ""
-        for ct_name, ct_root in network.claim_type_roots.items():
-            claim_types_html += f'<div class="claim-type-item" onclick="filterByClaimType(\'{ct_name}\')">{ct_name}</div>'
+        # Escape for JSON embedding
+        trees_json = json.dumps(trees_data).replace('</script>', '<\\/script>')
+        
+        # Build claim type buttons
+        claim_buttons = ""
+        first = True
+        for ct_name in network.claim_type_roots.keys():
+            active = "active" if first else ""
+            safe_name = ct_name.replace("'", "\\'").replace('"', '&quot;')
+            display_name = ct_name.replace('"', '&quot;').replace('<', '&lt;')
+            claim_buttons += f'<button class="claim-btn {active}" onclick="showClaimType(\'{safe_name}\')">{display_name}</button>'
+            first = False
         
         html = f'''<!DOCTYPE html>
 <html>
 <head>
-    <title>World Network - {network.document_name}</title>
+    <title>World Network Tree - {network.document_name}</title>
     <style>
-        * {{ box-sizing: border-box; }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-            margin: 0; 
-            padding: 20px; 
-            background: #f5f5f5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8f9fa;
+            overflow: hidden;
         }}
-        .container {{ max-width: 1400px; margin: 0 auto; }}
-        h1 {{ color: #1a1a1a; margin-bottom: 10px; }}
-        .info {{ 
-            background: white; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        .info-row {{ display: flex; gap: 20px; flex-wrap: wrap; }}
-        .info-item {{ }}
-        .info-label {{ font-weight: 600; color: #666; }}
-        .info-value {{ color: #1a1a1a; }}
-        
-        .legend {{ 
-            display: flex; 
-            gap: 15px; 
-            flex-wrap: wrap; 
-            margin-bottom: 20px;
+        .header {{
             background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 12px 20px;
+            border-bottom: 1px solid #e0e0e0;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
         }}
-        .legend-item {{ display: flex; align-items: center; gap: 8px; font-size: 14px; }}
-        .legend-color {{ width: 16px; height: 16px; border-radius: 4px; }}
-        
-        .main-content {{ display: flex; gap: 20px; }}
-        
-        .sidebar {{
-            width: 280px;
-            flex-shrink: 0;
-        }}
-        .sidebar-section {{
+        .header h1 {{ font-size: 16px; color: #333; margin-bottom: 8px; }}
+        .header-info {{ font-size: 12px; color: #666; margin-bottom: 8px; }}
+        .claim-buttons {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+        .claim-btn {{
+            padding: 5px 10px;
+            border: 1px solid #ddd;
             background: white;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        .sidebar-title {{ font-weight: 600; margin-bottom: 10px; color: #333; }}
-        .claim-type-item {{
-            padding: 8px 12px;
-            margin: 5px 0;
-            background: #f0f0f0;
-            border-radius: 4px;
+            border-radius: 14px;
             cursor: pointer;
-            font-size: 13px;
-            transition: background 0.2s;
+            font-size: 11px;
+            transition: all 0.2s;
         }}
-        .claim-type-item:hover {{ background: #e0e0e0; }}
-        .claim-type-item.active {{ background: #2196f3; color: white; }}
+        .claim-btn:hover {{ background: #f0f0f0; }}
+        .claim-btn.active {{ background: #2196f3; color: white; border-color: #2196f3; }}
         
-        .graph-container {{
-            flex: 1;
+        .legend {{
+            position: fixed;
+            top: 100px;
+            right: 15px;
             background: white;
+            padding: 10px;
             border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 100;
+            font-size: 11px;
+        }}
+        .legend-title {{ font-weight: 600; margin-bottom: 6px; }}
+        .legend-item {{ display: flex; align-items: center; gap: 6px; margin: 3px 0; }}
+        .legend-diamond {{ width: 10px; height: 10px; background: #2196f3; transform: rotate(45deg); border-radius: 2px; }}
+        .legend-rect {{ width: 12px; height: 8px; border-radius: 2px; }}
+        
+        .svg-container {{
+            margin-top: 95px;
             overflow: auto;
-            max-height: 800px;
+            height: calc(100vh - 95px);
+            cursor: grab;
+        }}
+        .svg-container:active {{ cursor: grabbing; }}
+        
+        #treeSvg {{
+            display: block;
+            min-width: 100%;
+            min-height: 100%;
         }}
         
-        .node-list {{
+        .tooltip {{
+            position: fixed;
+            background: rgba(0,0,0,0.85);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            max-width: 280px;
+            pointer-events: none;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            line-height: 1.4;
+        }}
+        .tooltip strong {{ color: #4fc3f7; }}
+        
+        .controls {{
+            position: fixed;
+            bottom: 15px;
+            left: 15px;
             display: flex;
-            flex-direction: column;
-            gap: 10px;
+            gap: 6px;
+            z-index: 100;
         }}
-        .node-card {{
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            padding: 12px;
-            background: #fafafa;
-        }}
-        .node-card:hover {{ background: #f0f0f0; }}
-        .node-header {{
+        .control-btn {{
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: white;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            font-size: 16px;
             display: flex;
             align-items: center;
-            gap: 10px;
-            margin-bottom: 8px;
+            justify-content: center;
         }}
-        .node-type-badge {{
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            color: white;
-        }}
-        .node-id {{ font-size: 12px; color: #888; }}
-        .node-content {{ font-size: 14px; color: #333; line-height: 1.4; }}
-        .node-section {{ font-size: 12px; color: #666; margin-top: 6px; }}
+        .control-btn:hover {{ background: #f0f0f0; }}
         
-        .edges-list {{
-            margin-top: 8px;
-            padding-top: 8px;
-            border-top: 1px dashed #ddd;
-        }}
-        .edge-item {{
-            font-size: 12px;
-            color: #555;
-            padding: 2px 0;
-        }}
-        .edge-label {{
-            background: #e3f2fd;
-            padding: 1px 6px;
-            border-radius: 4px;
-            font-weight: 500;
-        }}
-        
-        .stats-grid {{
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-        }}
-        .stat-item {{
-            text-align: center;
-            padding: 10px;
-            background: #f5f5f5;
-            border-radius: 6px;
-        }}
-        .stat-value {{ font-size: 24px; font-weight: 600; color: #2196f3; }}
-        .stat-label {{ font-size: 12px; color: #666; }}
-        
-        .filter-input {{
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 14px;
-            margin-bottom: 15px;
-        }}
-        .filter-input:focus {{ outline: none; border-color: #2196f3; }}
+        .tree-node {{ cursor: pointer; }}
+        .tree-node:hover rect, .tree-node:hover .diamond {{ filter: brightness(1.1); }}
+        .tree-edge {{ fill: none; stroke: #999; stroke-width: 1.5; }}
+        .edge-label {{ font-size: 9px; fill: #666; }}
+        .node-label {{ font-size: 10px; fill: #333; text-anchor: middle; }}
+        .node-label-white {{ font-size: 10px; fill: white; text-anchor: middle; dominant-baseline: middle; }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🌐 World Network: {network.document_name}</h1>
-        
-        <div class="info">
-            <div class="info-row">
-                <div class="info-item"><span class="info-label">Document ID:</span> <span class="info-value">{network.document_id}</span></div>
-                <div class="info-item"><span class="info-label">Version:</span> <span class="info-value">{network.current_version}</span></div>
-                <div class="info-item"><span class="info-label">Status:</span> <span class="info-value">{network.metadata.get('status', 'N/A')}</span></div>
-            </div>
+    <div class="header">
+        <h1>🌳 {network.document_name}</h1>
+        <div class="header-info">
+            Document: {network.document_id} | Version: {network.current_version} | 
+            Nodes: {len(network.nodes)} | Edges: {len(network.edges)}
         </div>
-        
-        <div class="legend">
-            <div class="legend-item"><div class="legend-color" style="background:{colors['decision']}"></div>Decision</div>
-            <div class="legend-item"><div class="legend-color" style="background:{colors['branch_yes']}"></div>Yes</div>
-            <div class="legend-item"><div class="legend-color" style="background:{colors['branch_no']}"></div>No</div>
-            <div class="legend-item"><div class="legend-color" style="background:{colors['branch_unsure']}"></div>Unsure</div>
-            <div class="legend-item"><div class="legend-color" style="background:{colors['claim_type']}"></div>Claim Type</div>
-            <div class="legend-item"><div class="legend-color" style="background:{colors['action']}"></div>Action</div>
-            <div class="legend-item"><div class="legend-color" style="background:{colors['reference']}"></div>Reference</div>
-        </div>
-        
-        <div class="main-content">
-            <div class="sidebar">
-                <div class="sidebar-section">
-                    <div class="sidebar-title">📊 Statistics</div>
-                    <div class="stats-grid">
-                        <div class="stat-item">
-                            <div class="stat-value">{len(network.nodes)}</div>
-                            <div class="stat-label">Nodes</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value">{len(network.edges)}</div>
-                            <div class="stat-label">Edges</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value">{len(network.claim_type_roots)}</div>
-                            <div class="stat-label">Claim Types</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value">{len(network.procedure_refs)}</div>
-                            <div class="stat-label">References</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="sidebar-section">
-                    <div class="sidebar-title">📋 Claim Types</div>
-                    <div class="claim-type-item active" onclick="filterByClaimType('all')">All Claim Types</div>
-                    {claim_types_html}
-                </div>
-            </div>
-            
-            <div class="graph-container">
-                <input type="text" class="filter-input" placeholder="🔍 Search nodes..." oninput="filterNodes(this.value)">
-                <div id="nodeList" class="node-list"></div>
-            </div>
+        <div class="claim-buttons">
+            {claim_buttons}
         </div>
     </div>
     
+    <div class="legend">
+        <div class="legend-title">Legend</div>
+        <div class="legend-item"><div class="legend-diamond"></div> Decision</div>
+        <div class="legend-item"><div class="legend-rect" style="background:#4caf50"></div> Yes Branch</div>
+        <div class="legend-item"><div class="legend-rect" style="background:#f44336"></div> No Branch</div>
+        <div class="legend-item"><div class="legend-rect" style="background:#ff9800"></div> Unsure</div>
+        <div class="legend-item"><div class="legend-rect" style="background:#9c27b0"></div> Claim Type</div>
+        <div class="legend-item"><div class="legend-rect" style="background:#607d8b"></div> Action/Step</div>
+    </div>
+    
+    <div class="controls">
+        <button class="control-btn" onclick="zoomIn()" title="Zoom In">+</button>
+        <button class="control-btn" onclick="zoomOut()" title="Zoom Out">−</button>
+        <button class="control-btn" onclick="resetView()" title="Reset">↺</button>
+    </div>
+    
+    <div class="tooltip" id="tooltip"></div>
+    
+    <div class="svg-container" id="svgContainer">
+        <svg id="treeSvg"></svg>
+    </div>
+    
     <script>
-        const nodesData = {json.dumps(nodes_data)};
-        const edgesData = {json.dumps(edges_data)};
+        const treesData = {trees_json};
+        const claimTypes = Object.keys(treesData);
+        let currentClaimType = claimTypes[0] || '';
         
-        let currentFilter = 'all';
-        let searchTerm = '';
+        const svgContainer = document.getElementById('svgContainer');
+        const svg = document.getElementById('treeSvg');
+        const tooltip = document.getElementById('tooltip');
         
-        function getEdgesForNode(nodeId) {{
-            return edgesData.filter(e => e.source === nodeId);
+        let scale = 1;
+        
+        const NODE_WIDTH = 130;
+        const NODE_HEIGHT = 32;
+        const LEVEL_HEIGHT = 75;
+        const NODE_SPACING = 15;
+        const DIAMOND_SIZE = 22;
+        
+        const colors = {{
+            'root': '#4caf50',
+            'claim_type': '#9c27b0',
+            'decision': '#2196f3',
+            'branch_yes': '#4caf50',
+            'branch_no': '#f44336',
+            'branch_unsure': '#ff9800',
+            'action': '#607d8b',
+            'step': '#607d8b',
+            'reference': '#e91e63',
+            'sub_decision': '#03a9f4',
+            'terminal': '#795548'
+        }};
+        
+        function calculateTreeLayout(node, level, leftOffset) {{
+            if (!node) return {{ width: 0, nodes: [], edges: [] }};
+            
+            const children = node.children || [];
+            let nodes = [];
+            let edges = [];
+            
+            if (children.length === 0) {{
+                const x = leftOffset + NODE_WIDTH / 2;
+                const y = level * LEVEL_HEIGHT + NODE_HEIGHT / 2 + 20;
+                nodes.push({{ ...node, x, y }});
+                return {{ width: NODE_WIDTH + NODE_SPACING, nodes, edges }};
+            }}
+            
+            let currentOffset = leftOffset;
+            let childResults = [];
+            
+            for (const child of children) {{
+                const result = calculateTreeLayout(child, level + 1, currentOffset);
+                childResults.push(result);
+                nodes = nodes.concat(result.nodes);
+                edges = edges.concat(result.edges);
+                currentOffset += result.width;
+            }}
+            
+            const totalWidth = childResults.reduce((sum, r) => sum + r.width, 0);
+            const firstChildX = childResults[0].nodes[0]?.x || leftOffset;
+            const lastChildX = childResults[childResults.length - 1].nodes[0]?.x || leftOffset;
+            const centerX = (firstChildX + lastChildX) / 2;
+            const y = level * LEVEL_HEIGHT + NODE_HEIGHT / 2 + 20;
+            
+            nodes.unshift({{ ...node, x: centerX, y }});
+            
+            // Create edges to children
+            for (const child of children) {{
+                const childNode = nodes.find(n => n.id === child.id);
+                if (childNode) {{
+                    edges.push({{
+                        fromX: centerX,
+                        fromY: y,
+                        toX: childNode.x,
+                        toY: childNode.y,
+                        label: child.edgeLabel || ''
+                    }});
+                }}
+            }}
+            
+            return {{ width: Math.max(totalWidth, NODE_WIDTH + NODE_SPACING), nodes, edges }};
         }}
         
-        function renderNodes() {{
-            const container = document.getElementById('nodeList');
-            let filtered = nodesData;
-            
-            // Filter by claim type
-            if (currentFilter !== 'all') {{
-                filtered = filtered.filter(n => n.section === currentFilter || n.type === 'root');
+        function renderTree() {{
+            const tree = treesData[currentClaimType];
+            if (!tree) {{
+                svg.innerHTML = '<text x="50" y="50" fill="#666">No data for this claim type</text>';
+                return;
             }}
             
-            // Filter by search term
-            if (searchTerm) {{
-                const term = searchTerm.toLowerCase();
-                filtered = filtered.filter(n => 
-                    n.label.toLowerCase().includes(term) || 
-                    n.id.toLowerCase().includes(term) ||
-                    n.fullContent.toLowerCase().includes(term)
-                );
-            }}
+            const result = calculateTreeLayout(tree, 0, 50);
+            const {{ nodes, edges }} = result;
             
-            container.innerHTML = filtered.map(node => {{
-                const edges = getEdgesForNode(node.id);
-                const edgesHtml = edges.length > 0 ? `
-                    <div class="edges-list">
-                        ${{edges.map(e => `
-                            <div class="edge-item">
-                                → ${{e.label ? `<span class="edge-label">${{e.label}}</span>` : ''}} ${{e.target}}
-                            </div>
-                        `).join('')}}
-                    </div>
-                ` : '';
+            // Calculate SVG size
+            let maxX = 0, maxY = 0;
+            nodes.forEach(n => {{
+                maxX = Math.max(maxX, n.x + NODE_WIDTH);
+                maxY = Math.max(maxY, n.y + NODE_HEIGHT + 30);
+            }});
+            
+            const width = Math.max(maxX + 100, 800);
+            const height = Math.max(maxY + 50, 600);
+            
+            svg.setAttribute('width', width * scale);
+            svg.setAttribute('height', height * scale);
+            svg.setAttribute('viewBox', `0 0 ${{width}} ${{height}}`);
+            
+            let svgContent = '';
+            
+            // Draw edges first
+            edges.forEach(edge => {{
+                const midY = (edge.fromY + edge.toY) / 2;
+                const fromYOffset = edge.fromY + (nodes.find(n => n.x === edge.fromX && n.y === edge.fromY)?.type?.includes('decision') ? DIAMOND_SIZE/2 + 5 : NODE_HEIGHT/2);
+                const toYOffset = edge.toY - NODE_HEIGHT/2;
                 
-                return `
-                    <div class="node-card">
-                        <div class="node-header">
-                            <span class="node-type-badge" style="background:${{node.color}}">${{node.type}}</span>
-                            <span class="node-id">${{node.id}}</span>
-                        </div>
-                        <div class="node-content">${{node.label}}</div>
-                        ${{node.section ? `<div class="node-section">📁 ${{node.section}}</div>` : ''}}
-                        ${{edgesHtml}}
-                    </div>
-                `;
-            }}).join('');
+                svgContent += `<path class="tree-edge" d="M ${{edge.fromX}} ${{fromYOffset}} C ${{edge.fromX}} ${{midY}}, ${{edge.toX}} ${{midY}}, ${{edge.toX}} ${{toYOffset}}"/>`;
+                
+                if (edge.label) {{
+                    const labelX = (edge.fromX + edge.toX) / 2;
+                    const labelY = midY - 3;
+                    svgContent += `<text class="edge-label" x="${{labelX}}" y="${{labelY}}" text-anchor="middle">${{edge.label}}</text>`;
+                }}
+            }});
+            
+            // Draw nodes
+            nodes.forEach(node => {{
+                const color = colors[node.type] || '#999';
+                const isDecision = node.type === 'decision' || node.type === 'sub_decision';
+                const escapedContent = (node.fullContent || node.name || '').replace(/"/g, '&quot;');
+                
+                if (isDecision) {{
+                    // Diamond shape
+                    const size = DIAMOND_SIZE;
+                    svgContent += `<g class="tree-node" onmouseover="showTooltip(event, '${{node.type}}', '${{escapedContent}}')" onmouseout="hideTooltip()">`;
+                    svgContent += `<rect class="diamond" x="${{node.x - size/2}}" y="${{node.y - size/2}}" width="${{size}}" height="${{size}}" fill="${{color}}" stroke="white" stroke-width="2" rx="3" transform="rotate(45 ${{node.x}} ${{node.y}})"/>`;
+                    const label = node.name.length > 22 ? node.name.substring(0, 22) + '...' : node.name;
+                    svgContent += `<text class="node-label" x="${{node.x}}" y="${{node.y + size/2 + 14}}">${{label}}</text>`;
+                    svgContent += '</g>';
+                }} else {{
+                    // Rounded rectangle
+                    svgContent += `<g class="tree-node" onmouseover="showTooltip(event, '${{node.type}}', '${{escapedContent}}')" onmouseout="hideTooltip()">`;
+                    svgContent += `<rect x="${{node.x - NODE_WIDTH/2}}" y="${{node.y - NODE_HEIGHT/2}}" width="${{NODE_WIDTH}}" height="${{NODE_HEIGHT}}" fill="${{color}}" stroke="white" stroke-width="2" rx="6"/>`;
+                    const label = node.name.length > 18 ? node.name.substring(0, 18) + '...' : node.name;
+                    svgContent += `<text class="node-label-white" x="${{node.x}}" y="${{node.y}}">${{label}}</text>`;
+                    svgContent += '</g>';
+                }}
+            }});
+            
+            svg.innerHTML = svgContent;
         }}
         
-        function filterByClaimType(claimType) {{
-            currentFilter = claimType;
-            document.querySelectorAll('.claim-type-item').forEach(el => el.classList.remove('active'));
-            event.target.classList.add('active');
-            renderNodes();
+        function showTooltip(event, type, content) {{
+            tooltip.innerHTML = '<strong>' + type.replace('_', ' ') + '</strong><br>' + content;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.clientX + 15) + 'px';
+            tooltip.style.top = (event.clientY + 15) + 'px';
         }}
         
-        function filterNodes(term) {{
-            searchTerm = term;
-            renderNodes();
+        function hideTooltip() {{
+            tooltip.style.display = 'none';
         }}
+        
+        function showClaimType(claimType) {{
+            currentClaimType = claimType;
+            document.querySelectorAll('.claim-btn').forEach(btn => {{
+                btn.classList.toggle('active', btn.textContent === claimType);
+            }});
+            renderTree();
+        }}
+        
+        function zoomIn() {{ scale = Math.min(scale * 1.2, 3); renderTree(); }}
+        function zoomOut() {{ scale = Math.max(scale / 1.2, 0.3); renderTree(); }}
+        function resetView() {{ scale = 1; svgContainer.scrollTo(0, 0); renderTree(); }}
         
         // Initial render
-        renderNodes();
+        renderTree();
     </script>
 </body>
 </html>'''
