@@ -844,6 +844,7 @@ class TreeVisualizationGenerator:
         html = f'''<!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>World Network Tree - {network.document_name}</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -1014,7 +1015,7 @@ class TreeVisualizationGenerator:
 </head>
 <body>
     <div class="header">
-        <h1>🌳 {network.document_name}</h1>
+        <h1>&#x1F333; {network.document_name}</h1>
         <div class="header-info">
             Document: {network.document_id} | Version: {network.current_version} | 
             Nodes: {len(network.nodes)} | Edges: {len(network.edges)}
@@ -1339,36 +1340,36 @@ class WorldNetworkProcessor:
         
         # Save World Network JSON
         json_path = os.path.join(output_dir, 'world_network.json')
-        with open(json_path, 'w') as f:
-            json.dump(network.to_dict(), f, indent=2)
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(network.to_dict(), f, indent=2, ensure_ascii=False)
         print(f"   ✓ World Network JSON: {json_path}")
         
         # Save parsed data
         parsed_path = os.path.join(output_dir, 'parsed_sop.json')
         parsed_data_copy = {k: v for k, v in parsed_data.items() if k != 'raw_text'}
-        with open(parsed_path, 'w') as f:
-            json.dump(parsed_data_copy, f, indent=2)
+        with open(parsed_path, 'w', encoding='utf-8') as f:
+            json.dump(parsed_data_copy, f, indent=2, ensure_ascii=False)
         print(f"   ✓ Parsed SOP JSON: {parsed_path}")
         
         # Generate and save HTML visualization
         html_path = os.path.join(output_dir, 'world_network_tree.html')
         html_content = TreeVisualizationGenerator.generate(network)
-        with open(html_path, 'w') as f:
+        with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
         print(f"   ✓ Interactive HTML Tree: {html_path}")
         
         # Generate decision tree text
         tree_path = os.path.join(output_dir, 'decision_tree.txt')
         tree_text = self._generate_decision_tree_text(network)
-        with open(tree_path, 'w') as f:
+        with open(tree_path, 'w', encoding='utf-8') as f:
             f.write(tree_text)
         print(f"   ✓ Decision Tree TXT: {tree_path}")
         
         # Generate statistics
         stats = self._generate_statistics(network)
         stats_path = os.path.join(output_dir, 'statistics.json')
-        with open(stats_path, 'w') as f:
-            json.dump(stats, f, indent=2)
+        with open(stats_path, 'w', encoding='utf-8') as f:
+            json.dump(stats, f, indent=2, ensure_ascii=False)
         print(f"   ✓ Statistics JSON: {stats_path}")
         
         # Print summary
